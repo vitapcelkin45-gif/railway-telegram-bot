@@ -1,57 +1,62 @@
 import os
+import re
 import time
-import asyncio
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from aiogram.utils import executor
-from dotenv import load_dotenv
+import logging
+from telegram import Update
+from telegram.ext import ApplicationBuilder, MessageHandler, filters, CallbackContext
 
-load_dotenv()
+logging.basicConfig(level=logging.INFO)
 
-API_TOKEN = os.getenv("API_TOKEN")
-bot = Bot(token=API_TOKEN)
-dp = Dispatcher(bot)
+# Получаем переменные окружения
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+SOURCE_BOT = "emperor_pars_bot"  # без @
+TARGET_BOT = "Nemo_Private_Bot"   # без @
+EMAIL = "gosumail228@gmail.com"   # жёстко заданный email
 
-SOURCE_BOT = "@emperor_pars_bot"
-TARGET_BOT = "@Nemo_Private_Bot"
-EMAIL_TO_SEND = "имя@gmail.com"
+# Создаём приложение
+app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-def is_valid_username(name):
-    if " " in name or len(name) <= 5:
+def is_valid_name(name: str) -> bool:
+    name = name.strip()
+    if ' ' in name or len(name) <= 5:
         return False
-    digits = sum(char.isdigit() for char in name)
-    return name.isalnum() and name.islower() and digits <= 4
+    if not name.isalnum():
+        return False
+    if sum(c.isdigit() for c in name) > 4:
+        return False
+    return True
 
-@dp.message_handler(content_types=types.ContentType.ANY, chat_type=types.ChatType.PRIVATE)
-async def handle_message(message: types.Message):
-    if message.chat.username == SOURCE_BOT.strip("@"):
-        text = message.text
-        name_line = next((line for line in text.splitlines() if "Имя:" in line), "")
-        name = name_line.replace("Имя:", "").strip()
+async def handle_message(update: Update, context: CallbackContext):
+    msg = update.message
+    if not msg:
+        return
 
-        if not is_valid_username(name):
+    if msg.chat.username == SOURCE_BOT:
+        text = msg.text or ""
+
+        # Парсим имя
+        m = re.search(r"Имя: (.+?)\\s+Chat", text)
+        if not m:
+            return
+        name = m.group(1).strip()
+        if not is_valid_name(name.lower()):
             return
 
-        if message.reply_markup:
-            for row in message.reply_markup.inline_keyboard:
-                for btn in row:
-                    if "Объявление" in btn.text:
-                        url = btn.url
-                        await send_to_nemo_bot(url, name)
+        # Парсим ссылку
+        links = re.findall(r"(https?://\S+)", text)
+        if not links:
+            return
 
-async def send_to_nemo_bot(url, username):
-    for _ in range(5):
-        await bot.send_message(TARGET_BOT, url)
-        await asyncio.sleep(10)
-        msgs = await bot.get_chat_history(TARGET_BOT, limit=1)
-        if msgs and any(keyword in msgs[0].text for keyword in ["Обьявление спарсилось"]):
-            break
-    await process_gosumail()
+        link = links[0]
 
-async def process_gosumail():
-    await asyncio.sleep(5)
-    # Эмуляция действий: найти кнопку GosuMail, ввести почту, нажать "Отправить"
-    # Здесь должен быть Telethon или пользовательский интерфейс
+        # Отправляем ссылку целевому боту
+        await context.bot.send_message(chat_id=f"@{TARGET_BOT}", text=link)
+        time.sleep(10)  # ждём 10 секунд
+        await context.bot.send_message(chat_id=f"@{TARGET_BOT}", text=EMAIL)
 
-if __name__ == "__main__":
-    executor.start_polling(dp)
+# Добавляем хендлер
+handler = MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
+app.add_handler(handler)
+
+# Запускаем бота
+app.run_polling()
